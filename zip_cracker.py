@@ -1,118 +1,148 @@
-import hashlib
-import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, filedialog
+import zipfile
+import threading
+import os
 
-def calculate_file_hash(filename):
-    """Calculate MD5 hash of a file."""
-    hash_md5 = hashlib.md5()
-    try:
-        with open(filename, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-    except FileNotFoundError:
-        return None
-    except Exception as e:
-        return f"Error reading file {filename}: {e}"
+class ZipWordlistCracker:
+    def __init__(self):
+        self.window = tk.Tk()
+        self.window.title("ZIP File Password Cracker (Wordlist Only)")
+        self.window.geometry("600x400")
 
-def save_hash(filename, hash_value):
-    """Save the hash value to a text file."""
-    hash_filename = f"{filename}.hash"
-    with open(hash_filename, "w") as f:
-        f.write(hash_value)
-    return hash_filename
+        # GUI Elements
+        tk.Label(self.window, text="ZIP File Password Cracker (Wordlist Only)", font=("Arial", 14)).pack(pady=10)
 
-def check_hash(filename, output_text):
-    """Check if the current file hash matches the saved hash."""
-    hash_filename = f"{filename}.hash"
-    
-    # Calculate current hash
-    current_hash = calculate_file_hash(filename)
-    if current_hash is None:
-        output_text.insert(tk.END, f"Could not calculate hash for {filename}\n")
-        return
-    elif isinstance(current_hash, str) and current_hash.startswith("Error"):
-        output_text.insert(tk.END, f"{current_hash}\n")
-        return
-    
-    # Check if hash file exists
-    if not os.path.exists(hash_filename):
-        hash_file = save_hash(filename, current_hash)
-        output_text.insert(tk.END, f"No previous hash found. Hash saved to {hash_file}\n")
-        return
-    
-    # Read saved hash
-    with open(hash_filename, "r") as f:
-        saved_hash = f.read().strip()
-    
-    # Compare hashes
-    if current_hash == saved_hash:
-        output_text.insert(tk.END, f"File integrity verified: {filename} has not been modified.\n")
-    else:
-        output_text.insert(tk.END, f"WARNING: File integrity compromised! {filename} has been modified.\n")
-        output_text.insert(tk.END, f"Original hash: {saved_hash}\n")
-        output_text.insert(tk.END, f"Current hash:  {current_hash}\n")
+        # ZIP file selection
+        tk.Label(self.window, text="Select a password-protected ZIP file:", font=("Arial", 10)).pack()
+        self.zip_path = tk.StringVar()
+        tk.Button(self.window, text="Browse ZIP File", 
+                 command=self.select_zip_file, 
+                 font=("Arial", 10)).pack(pady=5)
 
-def select_file(output_text):
-    """Open file dialog and check the selected file."""
-    filename = filedialog.askopenfilename(title="Select a file to check")
-    if filename:
-        output_text.delete(1.0, tk.END)  # Clear previous output
-        output_text.insert(tk.END, f"Checking file: {filename}\n")
-        check_hash(filename, output_text)
+        # Wordlist file selection (fixed to rockyou.txt or custom)
+        tk.Label(self.window, text="Select rockyou.txt or custom wordlist:", font=("Arial", 10)).pack()
+        self.wordlist_path = tk.StringVar(value="rockyou.txt")  # Default to rockyou.txt
+        tk.Button(self.window, text="Browse Wordlist", 
+                 command=self.select_wordlist, 
+                 font=("Arial", 10)).pack(pady=5)
 
-def create_gui():
-    """Create an attractive GUI window."""
-    # Create the main window with a custom background
-    window = tk.Tk()
-    window.title("File Integrity Checker")
-    window.geometry("600x400")
-    window.configure(bg="#f0f8ff")  # Light blue background for a clean look
+        # Output area
+        self.output_text = scrolledtext.ScrolledText(self.window, width=70, height=20, font=("Arial", 10))
+        self.output_text.pack(pady=10)
 
-    # Create a gradient-like effect using frames
-    top_frame = tk.Frame(window, bg="#87ceeb", height=50)  # Sky blue header
-    top_frame.pack(fill="x")
+        # Start, Stop, and Quit buttons
+        button_frame = tk.Frame(self.window)
+        button_frame.pack(pady=5)
 
-    # Title label with styling
-    title_label = tk.Label(top_frame, text="File Integrity Checker", font=("Helvetica", 16, "bold"), 
-                          bg="#87ceeb", fg="white", pady=10)
-    title_label.pack()
+        self.stop_event = threading.Event()
+        tk.Button(button_frame, text="Start Cracking", 
+                 command=self.start_cracking, 
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Stop Cracking", 
+                 command=self.stop_cracking, 
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Quit", 
+                 command=self.window.quit, 
+                 font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
 
-    # Main content frame with a slightly different background
-    main_frame = tk.Frame(window, bg="#e6f3ff")  # Light pastel blue
-    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.cracking_thread = None
 
-    # Label for instructions
-    label = tk.Label(main_frame, text="Select a file to check its integrity", font=("Arial", 12), 
-                     bg="#e6f3ff", fg="#333333")
-    label.pack(pady=10)
+    def select_zip_file(self):
+        """Open a file dialog to select the ZIP file."""
+        zip_path = filedialog.askopenfilename(filetypes=[("ZIP files", "*.zip")])
+        if zip_path:
+            self.zip_path.set(zip_path)
+            self.output_text.insert(tk.END, f"Selected ZIP file: {zip_path}\n")
+            self.output_text.see(tk.END)
 
-    # Styled button to select file
-    select_button = tk.Button(main_frame, text="Select File", command=lambda: select_file(output_text), 
-                             font=("Arial", 10, "bold"), bg="#4CAF50", fg="white", 
-                             padx=10, pady=5, relief="raised", cursor="hand2")
-    select_button.pack(pady=5)
+    def select_wordlist(self):
+        """Open a file dialog to select the wordlist file (defaults to rockyou.txt)."""
+        wordlist_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")])
+        if wordlist_path:
+            self.wordlist_path.set(wordlist_path)
+            self.output_text.insert(tk.END, f"Selected wordlist: {wordlist_path}\n")
+            self.output_text.see(tk.END)
 
-    # Output area (scrollable text) with styled background
-    output_text = scrolledtext.ScrolledText(main_frame, width=70, height=20, font=("Arial", 10), 
-                                          bg="#ffffff", fg="#000000", relief="sunken", bd=2)
-    output_text.pack(pady=10)
+    def crack_zip_password(self, zip_path, wordlist_path):
+        """Attempt to crack the ZIP file password using only the wordlist."""
+        if not zip_path or not os.path.exists(zip_path):
+            self.output_text.insert(tk.END, "No valid ZIP file selected.\n")
+            self.output_text.see(tk.END)
+            return
 
-    # Styled quit button
-    quit_button = tk.Button(main_frame, text="Quit", command=window.quit, 
-                           font=("Arial", 10, "bold"), bg="#f44336", fg="white", 
-                           padx=10, pady=5, relief="raised", cursor="hand2")
-    quit_button.pack(pady=5)
+        if not wordlist_path or not os.path.exists(wordlist_path):
+            self.output_text.insert(tk.END, "No valid wordlist file selected.\n")
+            self.output_text.see(tk.END)
+            return
 
-    # Optional: Add an icon (if you have an .ico or .png file)
-    try:
-        # Replace 'icon.ico' with your icon file path (e.g., 'D:/path/to/icon.ico')
-        window.iconbitmap('icon.ico')  # Windows .ico file
-    except tk.TclError:
-        print("Icon not found. Using default window icon.")
+        self.output_text.insert(tk.END, f"Starting dictionary attack on {zip_path} using {wordlist_path}...\n")
+        self.output_text.see(tk.END)
 
-    window.mainloop()
+        found = False
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                for file_info in zip_file.infolist():
+                    if file_info.flag_bits & 0x1:  # Check if password-protected
+                        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as wordlist:
+                            for line in wordlist:
+                                guess = line.strip()
+                                if not guess or self.stop_event.is_set():
+                                    continue
+                                
+                                self.output_text.insert(tk.END, f"Trying: {guess}\n")
+                                self.output_text.see(tk.END)
+                                self.window.update()
+
+                                try:
+                                    zip_file.read(file_info.filename, pwd=guess.encode('utf-8'))
+                                    found = True
+                                    self.output_text.insert(tk.END, f"Password found: {guess}!\n")
+                                    self.output_text.see(tk.END)
+                                    messagebox.showinfo("Success", f"ZIP password cracked: {guess}")
+                                    return
+                                except RuntimeError:
+                                    continue
+
+        except Exception as e:
+            self.output_text.insert(tk.END, f"Error: {str(e)}\n")
+            self.output_text.see(tk.END)
+            messagebox.showerror("Error", f"Failed to crack ZIP: {e}")
+
+        if not found:
+            self.output_text.insert(tk.END, "Password not found in the wordlist.\n")
+            self.output_text.see(tk.END)
+            messagebox.showwarning("Failure", "Could not crack the ZIP password with the wordlist.")
+
+    def start_cracking(self):
+        """Start the dictionary attack in a separate thread."""
+        if self.cracking_thread and self.cracking_thread.is_alive():
+            messagebox.showwarning("Warning", "Cracking is already in progress!")
+            return
+
+        zip_path = self.zip_path.get().strip()
+        wordlist_path = self.wordlist_path.get().strip()
+        if not zip_path or not wordlist_path:
+            messagebox.showerror("Error", "Please select both a ZIP file and wordlist.")
+            return
+
+        self.stop_event.clear()
+        self.output_text.delete(1.0, tk.END)
+        self.cracking_thread = threading.Thread(target=self.crack_zip_password, 
+                                               args=(zip_path, wordlist_path), 
+                                               daemon=True)
+        self.cracking_thread.start()
+
+    def stop_cracking(self):
+        """Stop the dictionary attack."""
+        self.stop_event.set()
+        self.output_text.insert(tk.END, "Stopping dictionary attack...\n")
+        self.output_text.see(tk.END)
+
+    def run(self):
+        """Run the GUI main loop.""" 
+        self.window.mainloop()
 
 if __name__ == "__main__":
-    create_gui()
+    cracker = ZipWordlistCracker()
+    cracker.run()
